@@ -4,13 +4,11 @@ import pandas as pd
 import time
 
 # === KONFIGURACE ===
-FIXED_API_KEY = "AIzaSyBZXa2nnvwxlfd2lPuqytatB_P0H5SWKQg"
-# OPRAVA: Vracíme tam ten funkční 2.5 Flash
-MODEL_NAME = "models/gemini-2.5-flash"
+DEFAULT_API_KEY = "AIzaSyBZXa2nnvwxlfd2lPuqytatB_P0H5SWKQg"
 
 st.set_page_config(page_title="Contexto AI Generator", layout="wide", page_icon="⚡")
 
-# === CONTEXTO DESIGN ===
+# === DESIGN (Contexto Style) ===
 st.markdown("""
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;600&display=swap');
@@ -23,6 +21,8 @@ st.markdown("""
         }
         div.stButton > button:first-child:hover { transform: translateY(-2px); box-shadow: 0 4px 15px rgba(0, 232, 190, 0.4); }
         .stSelectbox > div > div > div { background-color: #0d1117; color: white; border: 1px solid #30363d; }
+        .stTextInput > div > div > input { background-color: #0d1117; color: white; border: 1px solid #30363d; }
+        
         #MainMenu, footer, header {visibility: hidden;}
     </style>
 """, unsafe_allow_html=True)
@@ -32,14 +32,40 @@ col1, col2 = st.columns([1, 6])
 with col1: st.markdown("## ⚡") 
 with col2:
     st.title("Contexto AI Generator")
-    st.markdown("<div style='margin-top: -20px; color: rgb(0, 232, 190);'>STABLE VERSION (Model 2.5)</div>", unsafe_allow_html=True)
+    st.markdown("<div style='margin-top: -20px; color: rgb(0, 232, 190);'>ADMIN CONSOLE</div>", unsafe_allow_html=True)
 st.markdown("---")
 
-# === SIDEBAR ===
+# === SIDEBAR (VRÁCENÝ OVLÁDACÍ PANEL) ===
 with st.sidebar:
-    st.header("⚙️ Nastavení")
+    st.header("⚙️ Konfigurace")
+    
+    # 1. API Klíč (Editovatelný!)
+    api_key = st.text_input("API Key", value=DEFAULT_API_KEY, type="password")
+    
+    # 2. Worker URL
     worker_url = st.text_input("Worker URL", value="https://plastic-planet.radim-81e.workers.dev/")
-    st.success("System Ready")
+    
+    # 3. Výběr modelu (Záchrana při chybě 404/403)
+    model_name = st.selectbox("Model AI", [
+        "models/gemini-2.5-flash",    # Tvůj nový
+        "models/gemini-1.5-flash",    # Starší, stabilní
+        "models/gemini-2.0-flash",    # Alternativa
+        "models/gemini-pro"           # Záloha
+    ])
+    
+    st.markdown("---")
+    
+    # Rychlý test, abys nemusel generovat celou tabulku pro zjištění chyby
+    if st.button("🛠 TEST SPOJENÍ"):
+        try:
+            url = f"https://generativelanguage.googleapis.com/v1beta/{model_name}:generateContent?key={api_key}"
+            resp = requests.post(url, json={"contents": [{"parts": [{"text": "TEST"}]}]}, headers={'Content-Type': 'application/json'})
+            if resp.status_code == 200:
+                st.success("✅ Spojení OK!")
+            else:
+                st.error(f"❌ Chyba {resp.status_code}: {resp.text}")
+        except Exception as e:
+            st.error(f"Chyba sítě: {e}")
 
 # === FUNKCE ===
 
@@ -65,34 +91,31 @@ def get_products(path):
         return r.json().get("items", [])
     except: return []
 
-def ask_ai(product):
-    url = f"https://generativelanguage.googleapis.com/v1beta/{MODEL_NAME}:generateContent?key={FIXED_API_KEY}"
+def ask_ai(product, key, model):
+    url = f"https://generativelanguage.googleapis.com/v1beta/{model}:generateContent?key={key}"
     
-    # Prompt s instrukcí pro doplnění chybějícího měřítka
     prompt = f"""
     Jsi expert na modely. Napiš unikátní popis produktu.
     
     VSTUP:
     Produkt: {product.get('PRODUCT')}
     Výrobce: {product.get('MANUFACTURER')}
-    Měřítko (Scale): {product.get('scale')}
+    Měřítko: {product.get('scale')}
     Kategorie: {product.get('CATEGORYTEXT')}
     
-    DŮLEŽITÉ: Pokud v poli 'Měřítko' není hodnota, musíš ji najít v názvu produktu nebo kategorie!
-    
-    ÚKOL:
+    POKYN: Pokud chybí měřítko, zjisti ho z kategorie.
     Vytvoř 4 části textu oddělené znaky "###".
     
     VÝSTUPNÍ FORMÁT:
     shortDescription###longDescription###metaTitle###metaDescription
     
     OBSAH:
-    1. shortDescription (HTML): 2-3 věty. Lákavé, prodejní.
-    2. longDescription (HTML): Nadpisy <h3>, <h4>. Historie předlohy (pokud existuje).
-    3. metaTitle: "Název | Plasticplanet.cz" (max 60 znaků)
-    4. metaDescription: Max 160 znaků.
+    1. shortDescription (HTML): 2-3 věty.
+    2. longDescription (HTML): Nadpisy <h3>, <h4>. Historie předlohy.
+    3. metaTitle: "Název | Plasticplanet.cz"
+    4. metaDescription: SEO popis.
     
-    TECHNICKÉ: Celý výstup musí být na JEDEN řádek. Žádné enter.
+    DŮLEŽITÉ: Celý výstup na JEDEN řádek.
     """
 
     payload = {
@@ -109,8 +132,7 @@ def ask_ai(product):
     try:
         resp = requests.post(url, json=payload, headers={'Content-Type': 'application/json'})
         
-        # Pokud je server přetížený, zkusíme to jednou znovu po pauze
-        if resp.status_code in [429, 503]:
+        if resp.status_code == 429: # Limit
             time.sleep(2)
             resp = requests.post(url, json=payload, headers={'Content-Type': 'application/json'})
 
@@ -134,6 +156,10 @@ else:
     sel_path = cat_map[name]
 
 if st.button("SPUSTIT GENERÁTOR", type="primary"):
+    if not api_key:
+        st.error("Chybí klíč!")
+        st.stop()
+
     with st.status("Pracuji...", expanded=True) as status:
         st.write("Stahuji data...")
         prods = get_products(sel_path)
@@ -143,7 +169,7 @@ if st.button("SPUSTIT GENERÁTOR", type="primary"):
             st.stop()
             
         total = len(prods)
-        st.write(f"Mám {total} produktů. Startuji AI ({MODEL_NAME}).")
+        st.write(f"Mám {total} produktů. Startuji AI.")
         
         bar = st.progress(0)
         res = []
@@ -151,7 +177,8 @@ if st.button("SPUSTIT GENERÁTOR", type="primary"):
         for i, p in enumerate(prods):
             status.update(label=f"Generuji: {p.get('PRODUCT')} ({i+1}/{total})")
             
-            raw = ask_ai(p)
+            # Předáváme klíč a model z lišty
+            raw = ask_ai(p, api_key, model_name)
             parts = raw.split("###")
             
             if len(parts) >= 4:
@@ -160,7 +187,7 @@ if st.button("SPUSTIT GENERÁTOR", type="primary"):
                 p["metaTitle"] = parts[2]
                 p["metaDescription"] = parts[3]
             else:
-                p["shortDescription"] = "CHYBA FORMÁTU"
+                p["shortDescription"] = f"CHYBA: {raw}"
                 p["longDescription"] = raw
             
             res.append(p)
