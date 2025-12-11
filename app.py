@@ -14,6 +14,7 @@ api_key = st.secrets.get("GEMINI_API_KEY")
 
 with st.sidebar:
     st.header("⚙️ Nastavení")
+    # Pokud klíč není v secrets, zeptáme se na něj
     if not api_key:
         api_key = st.text_input("Vlož Gemini API Key", type="password")
     
@@ -27,7 +28,8 @@ with st.sidebar:
         else:
             try:
                 genai.configure(api_key=api_key)
-                model = genai.GenerativeModel('gemini-1.5-flash')
+                # Pro test použijeme gemini-pro, ten funguje vždy
+                model = genai.GenerativeModel('gemini-pro')
                 res = model.generate_content("Ahoj")
                 st.success(f"✅ Spojení funguje! AI odpověděla: {res.text}")
             except Exception as e:
@@ -50,7 +52,7 @@ def get_categories_list():
         return []
 
 def get_all_products_in_category(cat_path):
-    """Stáhne 'vše' z kategorie (limit 5000 je maximum workeru)"""
+    """Stáhne 'vše' z kategorie"""
     params = {
         "fn": "products",
         "path": cat_path,
@@ -59,7 +61,7 @@ def get_all_products_in_category(cat_path):
     }
     try:
         r = requests.get(worker_url, params=params)
-        r.encoding = 'utf-8' # Oprava EAN kódování
+        r.encoding = 'utf-8'
         r.raise_for_status()
         return r.json().get("items", [])
     except Exception as e:
@@ -107,8 +109,6 @@ with st.spinner("Načítám seznam kategorií..."):
     all_cats = get_categories_list()
 
 if not all_cats:
-    st.error("Nepodařilo se načíst seznam kategorií. Zkontroluj URL Workeru.")
-    # Pokud selže načtení, dovolíme alespoň ruční zadání jako zálohu
     selected_cat = st.text_input("Zadej kategorii ručně (když selhal seznam)", "Modely + | Letadla a vrtulníky | 1:72")
 else:
     selected_cat = st.selectbox("📂 Vyber kategorii ze seznamu", all_cats)
@@ -119,7 +119,12 @@ if st.button("🚀 Vygenerovat celou kategorii", type="primary"):
         st.stop()
         
     genai.configure(api_key=api_key)
-    model = genai.GenerativeModel('gemini-1.5-flash')
+    
+    # TADY JE ZMĚNA: Pokud by Flash stále nešel, fallbackneme na Pro
+    try:
+        model = genai.GenerativeModel('gemini-1.5-flash')
+    except:
+        model = genai.GenerativeModel('gemini-pro')
     
     with st.status("Pracuji...", expanded=True) as status:
         st.write(f"Stahuji všechny produkty z: {selected_cat}...")
