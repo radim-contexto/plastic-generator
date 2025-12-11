@@ -6,14 +6,13 @@ import json
 
 # === 1. NASTAVENÍ STRÁNKY ===
 st.set_page_config(page_title="Plastic Planet AI", layout="wide")
-st.title("🤖 Plastic Planet: Generátor (Direct API)")
+st.title("🤖 Plastic Planet: Generátor (Direct API + Model Select)")
 
 # === 2. SIDEBAR A NASTAVENÍ ===
 api_key = st.secrets.get("GEMINI_API_KEY")
 
 with st.sidebar:
     st.header("⚙️ Nastavení")
-    st.info("ℹ️ Tento režim nepoužívá Google knihovnu, ale přímé REST API volání.")
     
     if not api_key:
         api_key = st.text_input("Vlož Gemini API Key", type="password")
@@ -22,27 +21,45 @@ with st.sidebar:
     
     st.markdown("---")
     
-    # TLAČÍTKO TESTU (Nyní testuje přímé volání)
-    if st.button("🛠 Otestovat API (Direct)"):
+    # VÝBĚR MODELU - TOTO JE TA ZÁCHRANA
+    st.subheader("🧠 Vyber AI Model")
+    selected_model = st.selectbox(
+        "Pokud jeden hází chybu 404, zkus jiný:",
+        [
+            "gemini-1.5-flash",          # Rychlý, nový
+            "gemini-1.5-flash-latest",   # Alternativní název
+            "gemini-1.5-pro",            # Chytrý, pomalejší
+            "gemini-pro",                # Starý, stabilní (funguje skoro vždy)
+            "gemini-1.0-pro"             # Jiný název pro starý
+        ]
+    )
+    
+    st.markdown("---")
+
+    # TLAČÍTKO TESTU
+    if st.button("🛠 Otestovat vybraný model"):
         if not api_key:
             st.error("Chybí klíč!")
         else:
             try:
-                # Testovací volání na Gemini 1.5 Flash
-                url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={api_key}"
+                # Testovací volání na VYBRANÝ model
+                url = f"https://generativelanguage.googleapis.com/v1beta/models/{selected_model}:generateContent?key={api_key}"
                 headers = {'Content-Type': 'application/json'}
-                data = {"contents": [{"parts": [{"text": "Odpověz pouze slovem: FUNGUJU"}]}]}
+                data = {"contents": [{"parts": [{"text": "Odpověz jen: FUNGUJU"}]}]}
                 
                 response = requests.post(url, headers=headers, json=data)
                 
                 if response.status_code == 200:
                     ans = response.json()
-                    text = ans['candidates'][0]['content']['parts'][0]['text']
-                    st.success(f"✅ Spojení funguje! Odpověď: {text}")
+                    try:
+                        text = ans['candidates'][0]['content']['parts'][0]['text']
+                        st.success(f"✅ {selected_model} funguje! Odpověď: {text}")
+                    except:
+                        st.warning("Odpověď přišla, ale má divný formát.")
                 else:
                     st.error(f"❌ Chyba {response.status_code}: {response.text}")
             except Exception as e:
-                st.error(f"❌ Chyba: {e}")
+                st.error(f"❌ Chyba sítě: {e}")
 
 # === 3. FUNKCE ===
 
@@ -70,11 +87,10 @@ def get_all_products_in_category(cat_path):
         st.error(f"Chyba Workeru: {e}")
         return []
 
-def ask_ai_direct(product, api_key):
-    """Volá Google API přímo přes HTTP, obchází knihovnu"""
+def ask_ai_direct(product, api_key, model_name):
+    """Volá Google API přímo s vybraným modelem"""
     
-    # URL pro model Flash (rychlý a levný)
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={api_key}"
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key}"
     
     prompt = f"""
     Jsi expertní copywriter. Vytvoř 4 pole pro CSV (oddělovač středník ;).
@@ -88,21 +104,15 @@ def ask_ai_direct(product, api_key):
     Nepoužívej Markdown. Odstraň nové řádky.
     """
 
-    # Nastavení JSON těla
     payload = {
-        "contents": [{
-            "parts": [{"text": prompt}]
-        }],
+        "contents": [{ "parts": [{"text": prompt}] }],
         "safetySettings": [
             {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
             {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
             {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
             {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"}
         ],
-        "generationConfig": {
-            "temperature": 0.4,
-            "maxOutputTokens": 2000
-        }
+        "generationConfig": { "temperature": 0.4 }
     }
     
     try:
@@ -110,13 +120,19 @@ def ask_ai_direct(product, api_key):
         
         if response.status_code == 200:
             result = response.json()
-            # Vytahujeme text z té složité JSON struktury
             try:
                 return result['candidates'][0]['content']['parts'][0]['text'].strip()
             except:
                 return "CHYBA PARSINGU;CHYBA;CHYBA;CHYBA"
         else:
-            return f"CHYBA HTTP {response.status_code};CHYBA;CHYBA;CHYBA"
+            # Vrátíme detail chyby do tabulky
+            err_msg = f"HTTP {response.status_code}"
+            try:
+                err_json = response.json()
+                err_msg += f": {err_json['error']['message']}"
+            except:
+                pass
+            return f"{err_msg};CHYBA;CHYBA;CHYBA"
             
     except Exception as e:
         return f"CHYBA SÍTĚ: {str(e)};CHYBA;CHYBA;CHYBA"
@@ -131,12 +147,12 @@ if not all_cats:
 else:
     selected_cat = st.selectbox("📂 Vyber kategorii", all_cats)
 
-if st.button("🚀 Vygenerovat (Direct API)", type="primary"):
+if st.button("🚀 Vygenerovat", type="primary"):
     if not api_key:
         st.error("Chybí klíč!")
         st.stop()
         
-    with st.status("Pracuji...", expanded=True) as status:
+    with st.status(f"Pracuji (Model: {selected_model})...", expanded=True) as status:
         st.write(f"Stahuji data: {selected_cat}...")
         products = get_all_products_in_category(selected_cat)
         
@@ -153,8 +169,8 @@ if st.button("🚀 Vygenerovat (Direct API)", type="primary"):
         for i, p in enumerate(products):
             status.update(label=f"Generuji {i+1}/{total}: {p.get('PRODUCT')}")
             
-            # VOLÁME NOVOU PŘÍMOU FUNKCI
-            csv_line = ask_ai_direct(p, api_key)
+            # VOLÁME FUNKCI S VYBRANÝM MODELEM
+            csv_line = ask_ai_direct(p, api_key, selected_model)
             
             parts = csv_line.split(";")
             if len(parts) < 4: parts = [csv_line, "Chyba", "Chyba", "Chyba"]
