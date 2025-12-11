@@ -2,11 +2,11 @@ import streamlit as st
 import requests
 import pandas as pd
 import time
+import json
 
-# === KONFIGURACE (HARDCODED) ===
-# Klíč je napevno, uživatel ho nevidí a nemůže změnit.
+# === KONFIGURACE ===
 FIXED_API_KEY = "AIzaSyBZXa2nnvwxlfd2lPuqytatB_P0H5SWKQg"
-MODEL_NAME = "models/gemini-2.5-flash"
+MODEL_NAME = "models/gemini-2.5-flash"  # Rychlý a moderní model
 
 st.set_page_config(page_title="Contexto AI Generator", layout="wide", page_icon="⚡")
 
@@ -16,30 +16,34 @@ st.markdown("""
         @import url('https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;600&display=swap');
         
         .stApp { background-color: #0e1117; font-family: 'Poppins', sans-serif; }
-        h1, h2, h3, h4 { color: #ffffff !important; }
+        h1, h2, h3, h4 { color: #ffffff !important; font-weight: 600; }
         
-        /* Tlačítka Contexto (Tyrkysová + Černý text) */
+        /* Tlačítka */
         div.stButton > button:first-child {
             background-color: rgb(0, 232, 190) !important;
             color: #000000 !important;
             border: none; padding: 12px 24px; border-radius: 6px;
-            font-weight: 600; text-transform: uppercase; width: 100%;
-            transition: all 0.3s ease;
+            font-size: 16px; font-weight: 600; text-transform: uppercase;
             box-shadow: 0 4px 15px rgba(0, 232, 190, 0.2);
+            width: 100%; transition: all 0.3s ease;
         }
         div.stButton > button:first-child:hover {
             transform: translateY(-2px);
             box-shadow: 0 6px 20px rgba(0, 232, 190, 0.4);
-            background-color: rgb(0, 200, 160) !important;
         }
         
         /* Inputy */
-        .stSelectbox > div > div > div {
+        .stTextInput > div > div > input, .stSelectbox > div > div > div {
             background-color: #0d1117; color: white; border: 1px solid #30363d;
         }
         
         /* Skrytí patiček */
         #MainMenu, footer, header {visibility: hidden;}
+        
+        /* Tabs (Záložky) */
+        .stTabs [data-baseweb="tab-list"] { gap: 24px; }
+        .stTabs [data-baseweb="tab"] { height: 50px; white-space: pre-wrap; background-color: #0e1117; border-radius: 4px; color: #fff; }
+        .stTabs [aria-selected="true"] { background-color: #161b22; border-bottom: 2px solid rgb(0, 232, 190); color: rgb(0, 232, 190); }
     </style>
 """, unsafe_allow_html=True)
 
@@ -47,83 +51,78 @@ st.markdown("""
 col1, col2 = st.columns([1, 6])
 with col1: st.markdown("## ⚡") 
 with col2:
-    st.title("Contexto AI Generator v6.0")
-    st.markdown("<div style='margin-top: -20px; color: rgb(0, 232, 190);'>POWERED BY CONTEXTO ENGINE (Creative Mode)</div>", unsafe_allow_html=True)
+    st.title("Contexto AI Generator v3.0")
+    st.markdown("<div style='margin-top: -20px; color: rgb(0, 232, 190); font-size: 14px;'>POWERED BY CONTEXTO ENGINE</div>", unsafe_allow_html=True)
 
 st.markdown("---")
 
 # === SIDEBAR ===
 with st.sidebar:
-    st.header("⚙️ Nastavení")
-    worker_url = st.text_input("Worker URL", value="https://plastic-planet.radim-81e.workers.dev/")
-    st.success("API Klíč aktivní (System Protected)")
+    st.header("⚙️ Konfigurace")
+    worker_url = st.text_input("Zdroj dat (Worker)", value="https://plastic-planet.radim-81e.workers.dev/")
+    st.info("ℹ️ API Klíč aktivní (System Protected)")
+    st.markdown("---")
+    st.caption("Verze 3.0 (Smart JSON + Retries)")
 
 # === FUNKCE ===
 
 @st.cache_data(ttl=600)
-def get_categories_map():
+def get_categories_list():
     try:
         r = requests.get(worker_url, params={"fn": "categories", "limit": 2000})
         r.encoding = 'utf-8'
         if r.status_code == 200:
             data = r.json()
-            cat_map = {}
-            for item in data.get("items", []):
-                path = item.get("path", "")
-                count = item.get("count", 0)
-                if count == 0 and "productCount" in item: count = item["productCount"]
-                cat_map[f"{path} ({count} ks)"] = path
-            return {k: cat_map[k] for k in sorted(cat_map.keys())}
-        return {}
-    except: return {}
+            cats = [item["path"] for item in data.get("items", [])]
+            return sorted(list(set(cats)))
+        return []
+    except: return []
 
-def get_products(cat_path):
+def get_products(cat_filter, mode="exact"):
+    """
+    mode='exact': hledá přesnou cestu (pro Katalog)
+    mode='search': hledá fulltextově v názvu kategorie (pro Filtr)
+    """
+    params = {"fn": "products", "limit": 5000, "mode": "view"}
+    
+    if mode == "exact":
+        params["path"] = cat_filter
+    else:
+        params["cat"] = cat_filter # Worker parametr 'cat' umí fulltext v cestě
+        
     try:
-        r = requests.get(worker_url, params={"fn": "products", "path": cat_path, "limit": 5000, "mode": "view"})
+        r = requests.get(worker_url, params=params)
         r.encoding = 'utf-8'
         r.raise_for_status()
         return r.json().get("items", [])
-    except: return []
+    except Exception as e:
+        st.error(f"Chyba spojení: {e}")
+        return []
 
-def ask_ai_creative(product, max_retries=3):
-    """
-    Kreativní režim:
-    - Používá oddělovač ### (aby se nerozbil CSV formát)
-    - Čte i CATEGORYTEXT pro doplnění měřítka
-    """
+def ask_ai_robust(product, max_retries=3):
+    """Generuje data s opakováním při chybě (Retry Logic) a JSON parsingem"""
     
     url = f"https://generativelanguage.googleapis.com/v1beta/{MODEL_NAME}:generateContent?key={FIXED_API_KEY}"
     
-    # Prompt posíláme s více daty, aby si AI domyslela chybějící měřítko
+    # Prompt nutící JSON výstup - mnohem bezpečnější než CSV string
     prompt = f"""
-    Jsi zkušený modelář a copywriter pro e-shop.
-    Napiš unikátní, čtivý a prodejní text. Žádné šablony.
+    Jsi senior copywriter. Zpracuj produkt a vrať validní JSON.
     
-    DATA O PRODUKTU:
-    Produkt: {product.get('PRODUCT')}
+    PRODUKT:
+    Název: {product.get('PRODUCT')}
     Výrobce: {product.get('MANUFACTURER')}
-    Měřítko (Scale): {product.get('scale')} (POKUD ZDE NENÍ HODNOTA, ODVOĎ JI Z NÁZVU KATEGORIE!)
-    Kategorie: {product.get('CATEGORYTEXT')}
+    Měřítko: {product.get('scale')}
+    Model: {product.get('modelClean')}
     
-    ÚKOL:
-    Vytvoř 4 textová pole. Odděl je PŘESNĚ sekvencí tří křížků: ###
+    POŽADOVANÝ VÝSTUP (JSON format):
+    {{
+        "shortDescription": "2-3 úderné HTML věty.",
+        "longDescription": "HTML struktura <h3>, <h4>. Fakta o předloze.",
+        "metaTitle": "Max 60 znaků | Plasticplanet.cz",
+        "metaDescription": "Max 160 znaků SEO."
+    }}
     
-    POŽADOVANÝ VÝSTUP:
-    shortDescription###longDescription###metaTitle###metaDescription
-    
-    OBSAH POLÍ:
-    1. shortDescription (HTML): 2-3 lákavé věty. O čem model je a pro koho je vhodný.
-    2. longDescription (HTML): 
-       - Struktura: <h3>Popis modelu</h3>, <h4>O předloze</h4>.
-       - Zde se rozepiš o historii skutečného stroje (tank, letadlo, loď...). Ukaž, že tomu rozumíš.
-       - Pokud nemáš fakta, popiš obecně daný typ techniky.
-    3. metaTitle: "Název | Plasticplanet.cz" (max 60 znaků)
-    4. metaDescription: Max 160 znaků. SEO optimalizované.
-    
-    TECHNICKÉ POKYNY:
-    - Žádný Markdown.
-    - Celý výstup na JEDEN řádek.
-    - Nepoužívej enter.
+    Pravidla: Žádný markdown, jen čistý JSON.
     """
 
     payload = {
@@ -134,90 +133,132 @@ def ask_ai_creative(product, max_retries=3):
             {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
             {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"}
         ],
-        "generationConfig": { "temperature": 0.65 } # Vyšší teplota = Větší kreativita (méně generické)
+        "generationConfig": { "temperature": 0.4, "responseMimeType": "application/json" }
     }
     
     for attempt in range(max_retries):
         try:
             response = requests.post(url, json=payload, headers={'Content-Type': 'application/json'})
             
-            # Pokud je server přetížený, počkáme
+            # Pokud je server přetížený (503) nebo limit (429), počkáme
             if response.status_code in [429, 503]:
-                time.sleep(2)
+                time.sleep(2 * (attempt + 1)) # Exponenciální čekání: 2s, 4s, 6s
                 continue
                 
             if response.status_code == 200:
                 result = response.json()
                 try:
-                    text = result['candidates'][0]['content']['parts'][0]['text'].strip()
-                    # Pokud AI vrátila text, je to OK.
-                    return text
+                    text_json = result['candidates'][0]['content']['parts'][0]['text']
+                    return json.loads(text_json) # Bezpečný parsing JSONu
                 except:
-                    pass
-        except:
+                    return None # Chyba struktury
+            else:
+                return None # Jiná chyba HTTP
+                
+        except Exception:
             time.sleep(1)
             continue
             
-    # Pokud to selže 3x, vrátíme chybu (lepší než generický nesmysl, aspoň víš, že to máš zkusit znova)
-    return "CHYBA_AI###CHYBA_AI###CHYBA_AI###CHYBA_AI"
+    return None # Všechny pokusy selhaly
 
-# === HLAVNÍ APLIKACE ===
+# === HLAVNÍ LOGIKA ===
 
-with st.spinner("Načítám kategorie..."):
-    cat_map = get_categories_map()
+# Záložky pro výběr režimu
+tab1, tab2 = st.tabs(["📂 Katalog kategorií", "🔍 Chytrý filtr / Vyhledávání"])
 
-if not cat_map:
-    selected_path = st.text_input("Zadejte cestu ručně", "Modely + | Letadla a vrtulníky | 1:72")
-else:
-    display_name = st.selectbox("Vyberte kategorii", options=list(cat_map.keys()))
-    selected_path = cat_map[display_name]
+selected_products = []
+search_info = ""
+
+with tab1:
+    with st.spinner("Načítám strom kategorií..."):
+        all_cats = get_categories_list()
+    
+    if all_cats:
+        cat_exact = st.selectbox("Vyberte konkrétní kategorii", all_cats, key="cat_select")
+        if cat_exact:
+            # Tady zatím nic nestahujeme, až po kliku na tlačítko, nebo pro info?
+            # Pro sjednocení logiky stáhneme data až při generování, 
+            # ale uživatel chce vidět počty. Takže musíme udělat "pre-fetch" nebo věřit odhadu.
+            # Zde nastavíme parametry pro pozdější stahování.
+            mode = "exact"
+            query = cat_exact
+
+with tab2:
+    st.markdown("Zadejte klíčové slovo (např. **'Civilní'**, **'Tanky'**, **'1:72'**). Spojí všechny odpovídající kategorie.")
+    cat_search = st.text_input("Hledat napříč kategoriemi", placeholder="Např. civilní vozidla")
+    if cat_search:
+        mode = "search"
+        query = cat_search
+    else:
+        # Fallback aby aplikace nespadla
+        mode = "none"
+        query = None
+
+# === TLAČÍTKO A PROCES ===
+
+st.markdown("---")
 
 if st.button("SPUSTIT GENERÁTOR", type="primary"):
-    
-    with st.status("🚀 Contexto AI pracuje...", expanded=True) as status:
-        st.write(f"Stahuji data...")
-        products = get_products(selected_path)
+    if mode == "none":
+        st.warning("⚠️ Vyberte kategorii nebo zadejte hledaný výraz.")
+        st.stop()
+
+    with st.status("🚀 Contexto AI startuje...", expanded=True) as status:
+        
+        # 1. Stažení dat
+        st.write(f"Získávám data (Režim: {mode}, Dotaz: {query})...")
+        products = get_products(query, mode=mode)
         
         if not products:
-            status.update(label="Kategorie je prázdná.", state="error")
+            status.update(label="❌ Žádné produkty nenalezeny.", state="error")
             st.stop()
             
         total = len(products)
-        st.write(f"Nalezeno {total} produktů. Generuji texty...")
+        st.write(f"✅ **Nalezeno {total} produktů** k zpracování.")
+        time.sleep(1) # Čas na přečtení počtu
         
+        # 2. Generování
+        st.write("Aplikuji AI modely (s ochranou proti výpadkům)...")
         my_bar = st.progress(0)
         results = []
         
         for i, p in enumerate(products):
-            status.update(label=f"Zpracovávám: **{p.get('PRODUCT')}** ({i+1}/{total})")
+            status.update(label=f"Generuji ({i+1}/{total}): **{p.get('PRODUCT')}**")
             
-            # Volání AI
-            raw_text = ask_ai_creative(p)
+            # Volání AI s retry logikou
+            ai_data = ask_ai_robust(p)
             
-            # Rozdělení podle ### (bezpečnější než středník)
-            parts = raw_text.split("###")
-            
-            if len(parts) >= 4:
-                p["shortDescription"] = parts[0].strip()
-                p["longDescription"] = parts[1].strip()
-                p["metaTitle"] = parts[2].strip()
-                p["metaDescription"] = parts[3].strip()
+            if ai_data:
+                p["shortDescription"] = ai_data.get("shortDescription", "")
+                p["longDescription"] = ai_data.get("longDescription", "")
+                p["metaTitle"] = ai_data.get("metaTitle", "")
+                p["metaDescription"] = ai_data.get("metaDescription", "")
             else:
-                # Pokud se formát rozpadne, zapíšeme původní text do prvního sloupce pro kontrolu
-                p["shortDescription"] = f"CHYBA FORMÁTU: {raw_text[:50]}..."
-                p["longDescription"] = raw_text
+                p["shortDescription"] = "CHYBA GENEROWÁNÍ"
+                p["longDescription"] = "Zkuste znovu později"
                 p["metaTitle"] = "CHYBA"
                 p["metaDescription"] = "CHYBA"
             
             results.append(p)
             my_bar.progress((i + 1) / total)
-            time.sleep(1.2) # Pauza pro stabilitu
+            
+            # Pauza proti přetížení (API limituje cca 15 requestů/min u Free tieru, tak zpomalíme)
+            time.sleep(1.5) 
             
         status.update(label="Hotovo! Export připraven.", state="complete")
         
+    # 3. Výsledek
     df = pd.DataFrame(results)
     st.success(f"✅ Zpracováno {len(df)} položek.")
-    st.dataframe(df[["PRODUCT", "shortDescription"]])
     
+    # Náhled
+    st.dataframe(df[["PRODUCT", "shortDescription", "metaTitle"]])
+    
+    # Export
     csv = df.to_csv(sep=";", index=False, encoding="utf-8-sig").encode("utf-8-sig")
-    st.download_button("📥 STÁHNOUT CSV EXPORT", csv, "contexto_export.csv", "text/csv")
+    st.download_button(
+        label="📥 STÁHNOUT CSV EXPORT",
+        data=csv,
+        file_name=f"export_{query.replace(' ', '_')}.csv",
+        mime="text/csv"
+    )
