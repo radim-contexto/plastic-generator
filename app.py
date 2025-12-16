@@ -7,49 +7,89 @@ import time
 import json
 
 # --- KONFIGURACE ---
-st.set_page_config(page_title="Generátor (XML)", layout="centered")
+st.set_page_config(page_title="Plastic Planet AI", layout="centered", page_icon="🧩")
 
-# URL tvého feedu
+# URL feedu a Model
 FEED_URL = "https://raw.githubusercontent.com/radim-contexto/xmlfeed/refs/heads/main/universal.xml"
 MODEL_NAME = "models/gemini-2.5-pro"
 
-# --- CSS PRO ČISTÝ DESIGN ---
+# --- CSS STYLING (BRANDING) ---
 st.markdown("""
     <style>
-    /* Skrytí zbytečností */
+    /* Skrytí defaultní hlavičky a patičky */
     #MainMenu, footer, header {visibility: hidden;}
     
-    /* Nadpis */
+    /* Centrování obrázků (Logo) */
+    div[data-testid="stImage"] {
+        display: flex;
+        justify-content: center;
+        margin-bottom: 20px;
+    }
+
+    /* Hlavní nadpis */
     h1 {
         text-align: center;
         font-family: 'Helvetica', sans-serif;
-        font-weight: 700;
-        padding-bottom: 30px;
+        font-weight: 800;
+        color: #000;
+        margin-bottom: 0px;
+        padding-bottom: 5px;
     }
     
-    /* Tlačítka */
+    /* Podnadpis Contexto */
+    .subtitle {
+        text-align: center;
+        color: #666;
+        font-size: 14px;
+        font-weight: 500;
+        margin-bottom: 30px;
+        text-transform: uppercase;
+        letter-spacing: 1px;
+    }
+
+    /* TLAČÍTKA - Barva a tvar */
     div.stButton > button {
         width: 100%;
-        background-color: #000000;
-        color: #ffffff;
-        font-weight: bold;
-        padding: 12px;
-        border-radius: 4px;
-        border: none;
+        background-color: rgb(0, 232, 190) !important; /* Tyrkysová */
+        color: #000000 !important; /* Černý text pro kontrast */
+        font-weight: 800 !important;
+        padding: 15px !important;
+        border-radius: 25px !important; /* Kulaté rohy */
+        border: none !important;
+        box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        transition: all 0.3s ease;
     }
     div.stButton > button:hover {
-        background-color: #333333;
-        color: #ffffff;
+        transform: translateY(-2px);
+        box-shadow: 0 6px 12px rgba(0,0,0,0.15);
+        background-color: rgb(20, 252, 210) !important; /* Světlejší při najetí */
+    }
+
+    /* Nahrazení ČERVENÉ barvy (Errors/Alerts) za Tyrkysovou */
+    div[data-testid="stAlert"] {
+        background-color: rgba(0, 232, 190, 0.1);
+        border: 1px solid rgb(0, 232, 190);
+        color: #005f50; /* Tmavší odstín pro čitelnost textu */
+        border-radius: 10px;
+    }
+    /* Ikonky v alertech */
+    div[data-testid="stAlert"] svg {
+        fill: rgb(0, 232, 190) !important;
     }
     
-    /* Tabulka */
-    div[data-testid="stDataFrame"] {
-        margin-top: 20px;
+    /* Inputy (API Key) */
+    .stTextInput input {
+        border-radius: 10px;
+        border: 1px solid #ddd;
+    }
+    .stTextInput input:focus {
+        border-color: rgb(0, 232, 190);
+        box-shadow: 0 0 5px rgba(0, 232, 190, 0.5);
     }
     </style>
 """, unsafe_allow_html=True)
 
-# --- NAČÍTÁNÍ DAT ---
+# --- LOGIKA APLIKACE ---
 
 @st.cache_data(ttl=3600)
 def load_data_from_xml(url):
@@ -57,80 +97,59 @@ def load_data_from_xml(url):
     try:
         resp = requests.get(url, timeout=60)
         resp.raise_for_status()
-        
-        # Parsování XML
         root = ET.fromstring(resp.content)
         products = []
         
         for item in root.findall(".//SHOPITEM"):
-            # Pomocná funkce pro bezpečné vytažení textu
             def get_text(tag_name):
                 node = item.find(tag_name)
                 return node.text if node is not None else ""
 
-            # Extrahuje data. Pokud se tagy ve feedu jmenují jinak, uprav to zde.
             prod = {
                 "PRODUCT": get_text("PRODUCT"),
                 "MANUFACTURER": get_text("MANUFACTURER"),
-                "modelClean": get_text("modelClean"), # Předpokládám, že tento tag v XML existuje
-                "scale": get_text("scale"),           # Předpokládám, že tento tag v XML existuje
+                "modelClean": get_text("modelClean"),
+                "scale": get_text("scale"),
                 "PRICE_VAT": get_text("PRICE_VAT"),
                 "URL": get_text("URL"),
                 "EAN": get_text("EAN"),
                 "CATEGORYTEXT": get_text("CATEGORYTEXT")
             }
-            
-            # Zahodíme produkty bez názvu nebo kategorie
             if prod["PRODUCT"] and prod["CATEGORYTEXT"]:
                 products.append(prod)
-                
         return products
-
     except Exception as e:
-        st.error(f"❌ Chyba při načítání XML: {e}")
+        st.error(f"Chyba při načítání XML: {e}")
         return []
-
-# --- AI GENERÁTOR ---
 
 def generate_descriptions(product, api_key):
     """Generování textů pomocí Gemini."""
     genai.configure(api_key=api_key)
-    
     config = {"temperature": 0.4, "response_mime_type": "application/json"}
     
     try:
-        # Primárně zkoušíme 2.5 Pro
         try:
             model = genai.GenerativeModel(MODEL_NAME, generation_config=config)
         except:
-            # Fallback na 1.5 Pro, kdyby 2.5 nebyl dostupný
             model = genai.GenerativeModel("models/gemini-1.5-pro", generation_config=config)
 
         # Data produktu
-        p_name = product.get("PRODUCT", "")
-        p_manuf = product.get("MANUFACTURER", "")
-        p_scale = product.get("scale", "")
-        p_cat = product.get("CATEGORYTEXT", "")
-
         prompt = f"""
-        ZADÁNÍ: Jsi copywriter pro modelářský e-shop. Napiš texty pro tento produkt:
-        
-        NÁZEV: {p_name}
-        VÝROBCE: {p_manuf}
-        MĚŘÍTKO: {p_scale}
-        KATEGORIE: {p_cat}
+        ZADÁNÍ: Jsi copywriter pro modelářský e-shop Plasticplanet.cz.
+        PRODUKT: {product.get("PRODUCT")}
+        VÝROBCE: {product.get("MANUFACTURER")}
+        MĚŘÍTKO: {product.get("scale")}
+        KATEGORIE: {product.get("CATEGORYTEXT")}
 
         VÝSTUP (JSON):
         {{
-            "shortDescription": "HTML (2-3 věty, neutrální, o čem model je)",
-            "longDescription": "HTML (Strukturovaný text s nadpisy <h3> a <h4>. Sekce: 'O výrobci', 'O měřítku', 'O modelu' - historie předlohy. Pokud chybí fakta, sekci vynech. Nevymýšlej si.)",
+            "shortDescription": "HTML (2-3 věty, neutrální)",
+            "longDescription": "HTML (Strukturovaný text s nadpisy h3, h4. Sekce: O výrobci, O měřítku, O modelu. Pokud chybí fakta, sekci vynech.)",
             "metaTitle": "SEO Titulek (max 60 znaků)",
             "metaDescription": "SEO Popisek (max 160 znaků)"
         }}
-        
         JAZYK: Čeština.
         """
-        
         response = model.generate_content(prompt)
         return json.loads(response.text)
 
@@ -142,34 +161,39 @@ def generate_descriptions(product, api_key):
             "metaDescription": ""
         }
 
-# --- HLAVNÍ UI ---
+# --- MAIN UI ---
 
 def main():
-    st.title("Generátor Popisků")
+    # 1. LOGO (Nadpisová část)
+    st.image("https://cdn.myshoptet.com/usr/www.plasticplanet.cz/user/logos/plasticplanet_new_rgb.png", width=300)
+    
+    st.markdown("<h1>Generátor popisků</h1>", unsafe_allow_html=True)
+    st.markdown('<div class="subtitle">Powered by Contexto Engine v2.0</div>', unsafe_allow_html=True)
 
-    # 1. API Klíč (Schovaný)
-    with st.expander("🔐 Nastavení API", expanded=False):
-        api_key = st.text_input("Google API Key", value=st.secrets.get("GOOGLE_API_KEY", ""), type="password")
+    # 2. API KLÍČ (Vždy viditelný)
+    st.markdown("### 🔑 Přístup")
+    # Zkusíme načíst ze secrets, ale necháme pole editovatelné
+    default_key = st.secrets.get("GOOGLE_API_KEY", "")
+    api_key = st.text_input("Vložte Google API Key", value=default_key, type="password", help="Klíč je nutný pro spuštění AI.")
 
-    # 2. Načtení dat
-    with st.spinner("Stahuji data z feedu..."):
+    if not api_key:
+        st.warning("⚠️ Pro pokračování zadejte API klíč.")
+        return
+
+    # 3. NAČTENÍ DAT
+    with st.spinner("⏳ Načítám feed..."):
         all_products = load_data_from_xml(FEED_URL)
 
     if not all_products:
-        st.warning("Nepodařilo se načíst feed nebo je prázdný.")
         return
 
-    # Převedení na DataFrame
+    # 4. TABULKA KATEGORIÍ
     df = pd.DataFrame(all_products)
-
-    # 3. Příprava seznamu kategorií
-    # Seskupíme podle kategorie a spočítáme počet produktů
     categories_df = df['CATEGORYTEXT'].value_counts().reset_index()
     categories_df.columns = ['Kategorie', 'Počet produktů']
     categories_df = categories_df.sort_values(by="Kategorie")
 
-    # 4. Výběr kategorie (Rolovací tabulka)
-    st.markdown("### 1. Vyberte kategorii ze seznamu")
+    st.markdown("### 📂 Vyberte kategorii")
     
     selection = st.dataframe(
         categories_df,
@@ -177,23 +201,21 @@ def main():
         hide_index=True,
         on_select="rerun",
         selection_mode="single-row",
-        height=400 # Fixní výška pro rolování
+        height=350
     )
 
-    # 5. Akce po výběru
+    # 5. AKCE
     if selection.selection.rows:
         idx = selection.selection.rows[0]
         selected_cat = categories_df.iloc[idx]["Kategorie"]
         count = categories_df.iloc[idx]["Počet produktů"]
         
-        st.info(f"Vybráno: **{selected_cat}** ({count} položek)")
+        st.markdown("---")
+        st.markdown(f"<h3 style='text-align: center'>Vybráno: {selected_cat}</h3>", unsafe_allow_html=True)
+        st.markdown(f"<p style='text-align: center; color: #666'>Počet položek ke zpracování: {count}</p>", unsafe_allow_html=True)
         
-        if st.button("🚀 SPUSTIT GENEROVÁNÍ"):
-            if not api_key:
-                st.error("Chybí API Klíč!")
-                return
-            
-            # Filtrace produktů jen pro vybranou kategorii
+        if st.button("🚀 SPUSTIT GENERÁTOR"):
+            # Filtrace
             target_products = df[df['CATEGORYTEXT'] == selected_cat].to_dict('records')
             
             results = []
@@ -203,37 +225,32 @@ def main():
             for i, item in enumerate(target_products):
                 status_text.text(f"Zpracovávám ({i+1}/{count}): {item.get('PRODUCT')}")
                 
-                # AI Generování
                 ai_data = generate_descriptions(item, api_key)
-                
-                # Spojení dat
                 final_row = {**item, **ai_data}
                 
-                # Úklid sloupců pro CSV (jen ty co chceme)
+                # Cleanup
                 export_cols = [
                     "PRODUCT", "MANUFACTURER", "modelClean", "scale", 
                     "PRICE_VAT", "URL", "EAN", "CATEGORYTEXT", 
                     "shortDescription", "longDescription", "metaTitle", "metaDescription"
                 ]
-                # Vytvoříme řádek jen s existujícími sloupci
                 clean_row = {k: final_row.get(k, "") for k in export_cols}
-                
                 results.append(clean_row)
                 
-                # Aktualizace baru
                 progress_bar.progress((i + 1) / count)
                 time.sleep(0.1) 
             
-            status_text.success("✅ Hotovo!")
+            status_text.empty()
+            st.success("✅ Hotovo! Data jsou připravena.")
             
-            # Export do CSV
+            # Export
             result_df = pd.DataFrame(results)
             csv_data = result_df.to_csv(sep=";", index=False, encoding="utf-8-sig")
             
             st.download_button(
-                label="📥 STÁHNOUT CSV",
+                label="📥 STÁHNOUT VÝSLEDEK (CSV)",
                 data=csv_data,
-                file_name=f"export_popisky.csv",
+                file_name=f"export_contexto.csv",
                 mime="text/csv"
             )
 
