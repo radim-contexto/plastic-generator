@@ -16,6 +16,15 @@ MODEL_NAME = "models/gemini-2.5-pro"
 # --- CSS STYLING (BRANDING) ---
 st.markdown("""
     <style>
+    /* PŘEPSÁNÍ HLAVNÍ BARVY TÉMATU (Tabulky, Checkboxy, Inputy) */
+    :root {
+        --primary-color: rgb(0, 232, 190) !important;
+        --background-color: #ffffff;
+        --secondary-background-color: #f0f2f6;
+        --text-color: #000000;
+        --font: sans-serif;
+    }
+
     /* Skrytí defaultní hlavičky a patičky */
     #MainMenu, footer, header {visibility: hidden;}
     
@@ -79,19 +88,26 @@ st.markdown("""
         fill: rgb(0, 232, 190) !important;
     }
     
-    /* INPUTY */
+    /* INPUTY (Focus barva) */
     .stTextInput input {
         border-radius: 10px;
         border: 1px solid #ddd;
         text-align: center;
     }
     .stTextInput input:focus {
-        border-color: rgb(0, 232, 190);
-        box-shadow: 0 0 5px rgba(0, 232, 190, 0.5);
+        border-color: rgb(0, 232, 190) !important;
+        box-shadow: 0 0 5px rgba(0, 232, 190, 0.5) !important;
     }
     div[data-testid="stWidgetLabel"] {
         justify-content: center;
         display: flex;
+    }
+
+    /* TABULKA - Checkbox a selekce */
+    div[data-testid="stDataFrame"] {
+        border: 1px solid #eee;
+        border-radius: 10px;
+        overflow: hidden;
     }
     </style>
 """, unsafe_allow_html=True)
@@ -214,11 +230,9 @@ def main():
         st.markdown(f"<h3 style='text-align: center'>Vybráno: {selected_cat}</h3>", unsafe_allow_html=True)
         st.markdown(f"<p style='text-align: center; color: #666'>Počet položek ke zpracování: {count}</p>", unsafe_allow_html=True)
         
-        # --- OPRAVA TLAČÍTKA ---
-        st.markdown("<br>", unsafe_allow_html=True) # Trochu místa
+        # --- TLAČÍTKO UPROSTŘED (Sloupce 1:1:1) ---
+        st.markdown("<br>", unsafe_allow_html=True)
         
-        # Použijeme sloupce 1:1:1. Tlačítko bude mít 1/3 šířky uprostřed.
-        # CSS zajistí, že text nebude zalamovat.
         btn_col1, btn_col2, btn_col3 = st.columns([1, 1, 1])
         
         with btn_col2:
@@ -255,7 +269,7 @@ def main():
             result_df = pd.DataFrame(results)
             csv_data = result_df.to_csv(sep=";", index=False, encoding="utf-8-sig")
             
-            # Tlačítko pro stažení taky vycentrujeme 1:1:1
+            # Tlačítko pro stažení - taky vycentrované
             dwn_col1, dwn_col2, dwn_col3 = st.columns([1, 1, 1])
             with dwn_col2:
                 st.download_button(
