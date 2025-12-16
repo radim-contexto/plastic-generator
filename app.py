@@ -19,13 +19,6 @@ st.markdown("""
     /* Skrytí defaultní hlavičky a patičky */
     #MainMenu, footer, header {visibility: hidden;}
     
-    /* Centrování obrázků (Logo) */
-    div[data-testid="stImage"] {
-        display: flex;
-        justify-content: center;
-        margin-bottom: 20px;
-    }
-
     /* Hlavní nadpis */
     h1 {
         text-align: center;
@@ -47,21 +40,30 @@ st.markdown("""
         letter-spacing: 1px;
     }
 
-    /* TLAČÍTKA - Barva a tvar */
+    /* TLAČÍTKA - Centrování a styl */
+    /* Zarovnání kontejneru tlačítka na střed */
+    div.stButton {
+        display: flex;
+        justify-content: center;
+    }
+    
+    /* Styl samotného tlačítka */
     div.stButton > button {
-        width: 100%;
+        /* width: 100%;  <-- Zrušeno roztažení na šířku */
         background-color: rgb(0, 232, 190) !important; /* Tyrkysová */
         color: #000000 !important; /* Černý text pro kontrast */
         font-weight: 800 !important;
-        padding: 15px !important;
-        border-radius: 25px !important; /* Kulaté rohy */
+        padding: 15px 60px !important; /* Větší padding po stranách */
+        border-radius: 30px !important; /* Ještě kulatější rohy */
         border: none !important;
-        box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        box-shadow: 0 4px 10px rgba(0, 232, 190, 0.3);
         transition: all 0.3s ease;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
     }
     div.stButton > button:hover {
-        transform: translateY(-2px);
-        box-shadow: 0 6px 12px rgba(0,0,0,0.15);
+        transform: translateY(-3px);
+        box-shadow: 0 8px 15px rgba(0, 232, 190, 0.4);
         background-color: rgb(20, 252, 210) !important; /* Světlejší při najetí */
     }
 
@@ -81,10 +83,17 @@ st.markdown("""
     .stTextInput input {
         border-radius: 10px;
         border: 1px solid #ddd;
+        text-align: center; /* Text v inputu na střed */
     }
     .stTextInput input:focus {
         border-color: rgb(0, 232, 190);
         box-shadow: 0 0 5px rgba(0, 232, 190, 0.5);
+    }
+    
+    /* Zarovnání labelu u inputu na střed */
+    div[data-testid="stWidgetLabel"] {
+        justify-content: center;
+        display: flex;
     }
     </style>
 """, unsafe_allow_html=True)
@@ -164,14 +173,16 @@ def generate_descriptions(product, api_key):
 # --- MAIN UI ---
 
 def main():
-    # 1. LOGO (Nadpisová část)
-    st.image("https://cdn.myshoptet.com/usr/www.plasticplanet.cz/user/logos/plasticplanet_new_rgb.png", width=300)
+    # 1. LOGO (Zarovnané na střed pomocí sloupců)
+    col_l, col_c, col_r = st.columns([1, 2, 1])
+    with col_c:
+        st.image("https://cdn.myshoptet.com/usr/www.plasticplanet.cz/user/logos/plasticplanet_new_rgb.png", use_container_width=True)
     
+    # Nadpisy
     st.markdown("<h1>Generátor popisků</h1>", unsafe_allow_html=True)
     st.markdown('<div class="subtitle">Powered by Contexto Engine v2.0</div>', unsafe_allow_html=True)
 
     # 2. API KLÍČ (Vždy viditelný)
-    st.markdown("### 🔑 Přístup")
     # Zkusíme načíst ze secrets, ale necháme pole editovatelné
     default_key = st.secrets.get("GOOGLE_API_KEY", "")
     api_key = st.text_input("Vložte Google API Key", value=default_key, type="password", help="Klíč je nutný pro spuštění AI.")
@@ -214,6 +225,7 @@ def main():
         st.markdown(f"<h3 style='text-align: center'>Vybráno: {selected_cat}</h3>", unsafe_allow_html=True)
         st.markdown(f"<p style='text-align: center; color: #666'>Počet položek ke zpracování: {count}</p>", unsafe_allow_html=True)
         
+        # Tlačítko (CSS ho zarovná na střed)
         if st.button("🚀 SPUSTIT GENERÁTOR"):
             # Filtrace
             target_products = df[df['CATEGORYTEXT'] == selected_cat].to_dict('records')
