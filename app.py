@@ -2,198 +2,240 @@ import streamlit as st
 import pandas as pd
 import requests
 import google.generativeai as genai
+import xml.etree.ElementTree as ET
 import time
 import json
 
-# --- KONFIGURACE UI ---
-st.set_page_config(page_title="Generátor", layout="centered")
+# --- KONFIGURACE ---
+st.set_page_config(page_title="Generátor (XML)", layout="centered")
 
-# Skrytí menu a patičky pro čistý vzhled
+# URL tvého feedu
+FEED_URL = "https://raw.githubusercontent.com/radim-contexto/xmlfeed/refs/heads/main/universal.xml"
+MODEL_NAME = "models/gemini-2.5-pro"
+
+# --- CSS PRO ČISTÝ DESIGN ---
 st.markdown("""
     <style>
+    /* Skrytí zbytečností */
     #MainMenu, footer, header {visibility: hidden;}
-    h1 {text-align: center; padding-bottom: 20px;}
-    .stButton button {width: 100%; background: #000; color: #fff; font-weight: bold;}
-    .stButton button:hover {background: #333; color: #fff; border-color: #333;}
+    
+    /* Nadpis */
+    h1 {
+        text-align: center;
+        font-family: 'Helvetica', sans-serif;
+        font-weight: 700;
+        padding-bottom: 30px;
+    }
+    
+    /* Tlačítka */
+    div.stButton > button {
+        width: 100%;
+        background-color: #000000;
+        color: #ffffff;
+        font-weight: bold;
+        padding: 12px;
+        border-radius: 4px;
+        border: none;
+    }
+    div.stButton > button:hover {
+        background-color: #333333;
+        color: #ffffff;
+    }
+    
+    /* Tabulka */
+    div[data-testid="stDataFrame"] {
+        margin-top: 20px;
+    }
     </style>
 """, unsafe_allow_html=True)
 
-# --- KONSTANTY ---
-WORKER_URL = "https://plastic-planet.radim-81e.workers.dev"
-MODEL_NAME = "models/gemini-2.5-pro"
+# --- NAČÍTÁNÍ DAT ---
 
-# --- FUNKCE ---
-
-def get_categories_safe(worker_url):
-    """Bezpečné načtení kategorií - poradí si s objekty i prostým textem."""
+@st.cache_data(ttl=3600)
+def load_data_from_xml(url):
+    """Stáhne XML a převede ho na seznam produktů."""
     try:
-        resp = requests.get(worker_url, params={"fn": "categories"}, timeout=10)
+        resp = requests.get(url, timeout=60)
         resp.raise_for_status()
-        data = resp.json()
         
-        # Worker může vracet data přímo nebo v 'payload'
-        payload = data.get("payload", data)
+        # Parsování XML
+        root = ET.fromstring(resp.content)
+        products = []
         
-        # Pojistka: pokud to není seznam, uděláme z toho seznam
-        if not isinstance(payload, list):
-            return [payload] if payload else []
+        for item in root.findall(".//SHOPITEM"):
+            # Pomocná funkce pro bezpečné vytažení textu
+            def get_text(tag_name):
+                node = item.find(tag_name)
+                return node.text if node is not None else ""
+
+            # Extrahuje data. Pokud se tagy ve feedu jmenují jinak, uprav to zde.
+            prod = {
+                "PRODUCT": get_text("PRODUCT"),
+                "MANUFACTURER": get_text("MANUFACTURER"),
+                "modelClean": get_text("modelClean"), # Předpokládám, že tento tag v XML existuje
+                "scale": get_text("scale"),           # Předpokládám, že tento tag v XML existuje
+                "PRICE_VAT": get_text("PRICE_VAT"),
+                "URL": get_text("URL"),
+                "EAN": get_text("EAN"),
+                "CATEGORYTEXT": get_text("CATEGORYTEXT")
+            }
             
-        return payload
+            # Zahodíme produkty bez názvu nebo kategorie
+            if prod["PRODUCT"] and prod["CATEGORYTEXT"]:
+                products.append(prod)
+                
+        return products
+
     except Exception as e:
-        st.error(f"Chyba načítání feedu: {e}")
+        st.error(f"❌ Chyba při načítání XML: {e}")
         return []
 
-def get_products_recursive(worker_url, category_path):
-    """Stáhne všechny produkty z vybrané kategorie."""
-    products = []
-    limit = 50 
-    offset = 0
-    status = st.empty()
-    
-    while True:
-        status.info(f"⏳ Stahuji položky... ({len(products)} načteno)")
-        try:
-            params = {"fn": "products", "path": category_path, "limit": limit, "offset": offset}
-            resp = requests.get(worker_url, params=params, timeout=20)
-            data = resp.json()
-            
-            batch = data.get("payload", [])
-            if not batch: break
-            products.extend(batch)
-            
-            next_offset = data.get("nextOffset")
-            if not next_offset or next_offset == 0: break
-            offset = next_offset
-            time.sleep(0.1)
-        except: break
-            
-    status.empty()
-    return products
+# --- AI GENERÁTOR ---
 
 def generate_descriptions(product, api_key):
-    """Generování textů přes Gemini 2.5 Pro."""
+    """Generování textů pomocí Gemini."""
     genai.configure(api_key=api_key)
-    # Zkusíme 2.5, když nepůjde, fallback na 1.5-pro
+    
+    config = {"temperature": 0.4, "response_mime_type": "application/json"}
+    
     try:
-        model = genai.GenerativeModel(MODEL_NAME, generation_config={"response_mime_type": "application/json"})
-    except:
-        model = genai.GenerativeModel("models/gemini-1.5-pro", generation_config={"response_mime_type": "application/json"})
+        # Primárně zkoušíme 2.5 Pro
+        try:
+            model = genai.GenerativeModel(MODEL_NAME, generation_config=config)
+        except:
+            # Fallback na 1.5 Pro, kdyby 2.5 nebyl dostupný
+            model = genai.GenerativeModel("models/gemini-1.5-pro", generation_config=config)
 
-    prompt = f"""
-    PRODUKT: {product.get('PRODUCT')} | {product.get('MANUFACTURER')} | {product.get('scale')}
-    ÚKOL: Vytvoř JSON s popisky pro e-shop.
-    JAZYK: Čeština.
-    STRUKTURA JSON:
-    {{
-        "shortDescription": "HTML (2-3 věty)",
-        "longDescription": "HTML (strukturovaný text s nadpisy h3, h4. Sekce: O výrobci, O měřítku, O modelu. Pokud chybí fakta, sekci vynech.)",
-        "metaTitle": "SEO Titulek (max 60 znaků)",
-        "metaDescription": "SEO Popis (max 160 znaků)"
-    }}
-    """
-    try:
-        resp = model.generate_content(prompt)
-        return json.loads(resp.text)
-    except:
-        return {"shortDescription": "<p>Chyba.</p>", "longDescription": "", "metaTitle": "", "metaDescription": ""}
+        # Data produktu
+        p_name = product.get("PRODUCT", "")
+        p_manuf = product.get("MANUFACTURER", "")
+        p_scale = product.get("scale", "")
+        p_cat = product.get("CATEGORYTEXT", "")
+
+        prompt = f"""
+        ZADÁNÍ: Jsi copywriter pro modelářský e-shop. Napiš texty pro tento produkt:
+        
+        NÁZEV: {p_name}
+        VÝROBCE: {p_manuf}
+        MĚŘÍTKO: {p_scale}
+        KATEGORIE: {p_cat}
+
+        VÝSTUP (JSON):
+        {{
+            "shortDescription": "HTML (2-3 věty, neutrální, o čem model je)",
+            "longDescription": "HTML (Strukturovaný text s nadpisy <h3> a <h4>. Sekce: 'O výrobci', 'O měřítku', 'O modelu' - historie předlohy. Pokud chybí fakta, sekci vynech. Nevymýšlej si.)",
+            "metaTitle": "SEO Titulek (max 60 znaků)",
+            "metaDescription": "SEO Popisek (max 160 znaků)"
+        }}
+        
+        JAZYK: Čeština.
+        """
+        
+        response = model.generate_content(prompt)
+        return json.loads(response.text)
+
+    except Exception as e:
+        return {
+            "shortDescription": "<p>Chyba při generování.</p>",
+            "longDescription": "",
+            "metaTitle": product.get("PRODUCT", ""),
+            "metaDescription": ""
+        }
 
 # --- HLAVNÍ UI ---
 
 def main():
     st.title("Generátor Popisků")
 
-    # API Klíč (schovaný)
-    with st.expander("🔐 Nastavení"):
+    # 1. API Klíč (Schovaný)
+    with st.expander("🔐 Nastavení API", expanded=False):
         api_key = st.text_input("Google API Key", value=st.secrets.get("GOOGLE_API_KEY", ""), type="password")
 
-    # 1. Načtení kategorií (automaticky)
-    if 'categories' not in st.session_state:
-        st.session_state['categories'] = get_categories_safe(WORKER_URL)
+    # 2. Načtení dat
+    with st.spinner("Stahuji data z feedu..."):
+        all_products = load_data_from_xml(FEED_URL)
 
-    cats_raw = st.session_state['categories']
+    if not all_products:
+        st.warning("Nepodařilo se načíst feed nebo je prázdný.")
+        return
+
+    # Převedení na DataFrame
+    df = pd.DataFrame(all_products)
+
+    # 3. Příprava seznamu kategorií
+    # Seskupíme podle kategorie a spočítáme počet produktů
+    categories_df = df['CATEGORYTEXT'].value_counts().reset_index()
+    categories_df.columns = ['Kategorie', 'Počet produktů']
+    categories_df = categories_df.sort_values(by="Kategorie")
+
+    # 4. Výběr kategorie (Rolovací tabulka)
+    st.markdown("### 1. Vyberte kategorii ze seznamu")
     
-    if cats_raw:
-        # PŘÍPRAVA DAT PRO TABULKU (OPRAVA CHYBY Z MINULA)
-        table_data = []
-        for c in cats_raw:
-            # Pokud je kategorie jen text (str), použijeme ho jako název i ID
-            if isinstance(c, str):
-                table_data.append({"Kategorie": c, "ID": c})
-            # Pokud je to objekt (dict), vytáhneme data
-            elif isinstance(c, dict):
-                table_data.append({
-                    "Kategorie": c.get('name', 'Bez názvu'), 
-                    "ID": c.get('path', c.get('id', c.get('name')))
-                })
+    selection = st.dataframe(
+        categories_df,
+        use_container_width=True,
+        hide_index=True,
+        on_select="rerun",
+        selection_mode="single-row",
+        height=400 # Fixní výška pro rolování
+    )
 
-        df = pd.DataFrame(table_data)
-
-        # 2. VYKRESLENÍ ROLOVACÍHO SEZNAMU
-        st.write("### Vyberte kategorii ze seznamu:")
+    # 5. Akce po výběru
+    if selection.selection.rows:
+        idx = selection.selection.rows[0]
+        selected_cat = categories_df.iloc[idx]["Kategorie"]
+        count = categories_df.iloc[idx]["Počet produktů"]
         
-        selection = st.dataframe(
-            df,
-            use_container_width=True,
-            hide_index=True,
-            on_select="rerun",
-            selection_mode="single-row",
-            height=400  # Výška pro rolování
-        )
-
-        # 3. AKCE PO KLIKNUTÍ
-        if selection.selection.rows:
-            idx = selection.selection.rows[0]
-            selected_row = df.iloc[idx]
-            cat_name = selected_row["Kategorie"]
-            cat_id = selected_row["ID"]
-
-            st.success(f"Vybráno: **{cat_name}**")
+        st.info(f"Vybráno: **{selected_cat}** ({count} položek)")
+        
+        if st.button("🚀 SPUSTIT GENEROVÁNÍ"):
+            if not api_key:
+                st.error("Chybí API Klíč!")
+                return
             
-            if st.button("🚀 SPUSTIT GENEROVÁNÍ"):
-                if not api_key:
-                    st.error("Chybí API klíč!")
-                    return
-
-                # Stahování
-                items = get_products_recursive(WORKER_URL, cat_id)
-                if not items:
-                    st.warning("Kategorie je prázdná.")
-                    return
+            # Filtrace produktů jen pro vybranou kategorii
+            target_products = df[df['CATEGORYTEXT'] == selected_cat].to_dict('records')
+            
+            results = []
+            progress_bar = st.progress(0)
+            status_text = st.empty()
+            
+            for i, item in enumerate(target_products):
+                status_text.text(f"Zpracovávám ({i+1}/{count}): {item.get('PRODUCT')}")
                 
-                # Generování
-                results = []
-                bar = st.progress(0)
-                info = st.empty()
+                # AI Generování
+                ai_data = generate_descriptions(item, api_key)
                 
-                for i, item in enumerate(items):
-                    info.text(f"Zpracovávám: {item.get('PRODUCT')}")
-                    ai_data = generate_descriptions(item, api_key)
-                    
-                    # Sloučení dat
-                    final = item.copy()
-                    final.update(ai_data)
-                    
-                    # Úklid pro CSV
-                    clean_row = {k: final.get(k, "") for k in [
-                        "PRODUCT", "MANUFACTURER", "modelClean", "scale", 
-                        "PRICE_VAT", "URL", "EAN", "CATEGORYTEXT", 
-                        "shortDescription", "longDescription", "metaTitle", "metaDescription"
-                    ]}
-                    results.append(clean_row)
-                    bar.progress((i+1)/len(items))
-                    time.sleep(0.1)
+                # Spojení dat
+                final_row = {**item, **ai_data}
                 
-                info.success("Hotovo!")
+                # Úklid sloupců pro CSV (jen ty co chceme)
+                export_cols = [
+                    "PRODUCT", "MANUFACTURER", "modelClean", "scale", 
+                    "PRICE_VAT", "URL", "EAN", "CATEGORYTEXT", 
+                    "shortDescription", "longDescription", "metaTitle", "metaDescription"
+                ]
+                # Vytvoříme řádek jen s existujícími sloupci
+                clean_row = {k: final_row.get(k, "") for k in export_cols}
                 
-                # Export
-                csv = pd.DataFrame(results).to_csv(sep=";", index=False, encoding="utf-8-sig")
-                st.download_button("📥 Stáhnout CSV", csv, f"export_{cat_id}.csv", "text/csv")
-    
-    else:
-        st.warning("Nepodařilo se načíst feed kategorií. Zkontrolujte Worker URL.")
-        if st.button("Zkusit znovu"):
-            st.session_state.pop('categories', None)
-            st.rerun()
+                results.append(clean_row)
+                
+                # Aktualizace baru
+                progress_bar.progress((i + 1) / count)
+                time.sleep(0.1) 
+            
+            status_text.success("✅ Hotovo!")
+            
+            # Export do CSV
+            result_df = pd.DataFrame(results)
+            csv_data = result_df.to_csv(sep=";", index=False, encoding="utf-8-sig")
+            
+            st.download_button(
+                label="📥 STÁHNOUT CSV",
+                data=csv_data,
+                file_name=f"export_popisky.csv",
+                mime="text/csv"
+            )
 
 if __name__ == "__main__":
     main()
