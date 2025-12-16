@@ -42,30 +42,33 @@ st.markdown("""
 
     /* TLAČÍTKA - Styl */
     div.stButton > button {
-        width: 100% !important; /* Vyplní šířku sloupce */
+        width: 100% !important; 
         background-color: rgb(0, 232, 190) !important; /* Tyrkysová */
         color: #000000 !important; /* Černý text */
         font-weight: 800 !important;
-        padding: 15px 0px !important; /* Padding nahoře/dole */
-        border-radius: 30px !important; /* Kulaté rohy */
+        font-size: 16px !important;
+        padding: 16px 24px !important; 
+        border-radius: 50px !important; /* Maximálně kulaté */
         border: none !important;
-        box-shadow: 0 4px 10px rgba(0, 232, 190, 0.3);
+        box-shadow: 0 4px 15px rgba(0, 232, 190, 0.4); /* Výraznější stín */
         transition: all 0.3s ease;
         text-transform: uppercase;
-        letter-spacing: 0.5px;
+        letter-spacing: 1px;
+        white-space: nowrap !important; /* ZÁKAZ ZALAMOVÁNÍ TEXTU */
     }
+    
     div.stButton > button:hover {
         transform: translateY(-3px);
-        box-shadow: 0 8px 15px rgba(0, 232, 190, 0.4);
-        background-color: rgb(20, 252, 210) !important;
+        box-shadow: 0 8px 25px rgba(0, 232, 190, 0.6);
+        background-color: rgb(50, 255, 220) !important;
     }
-    /* Odstranění outline při kliknutí */
-    div.stButton > button:focus {
-        outline: none;
-        box-shadow: 0 4px 10px rgba(0, 232, 190, 0.3);
+    
+    div.stButton > button:active {
+        transform: translateY(1px);
+        box-shadow: 0 2px 10px rgba(0, 232, 190, 0.4);
     }
 
-    /* ALERTY (Tyrkysové místo červené) */
+    /* ALERTY */
     div[data-testid="stAlert"] {
         background-color: rgba(0, 232, 190, 0.1);
         border: 1px solid rgb(0, 232, 190);
@@ -211,10 +214,12 @@ def main():
         st.markdown(f"<h3 style='text-align: center'>Vybráno: {selected_cat}</h3>", unsafe_allow_html=True)
         st.markdown(f"<p style='text-align: center; color: #666'>Počet položek ke zpracování: {count}</p>", unsafe_allow_html=True)
         
-        # --- ZDE JE OPRAVA CENTROVÁNÍ ---
-        # Vytvoříme 3 sloupce: Prázdný | Tlačítko | Prázdný
-        # Poměr [1, 2, 1] zajistí, že tlačítko bude uprostřed a bude mít hezkou šířku
-        btn_col1, btn_col2, btn_col3 = st.columns([1, 2, 1])
+        # --- OPRAVA TLAČÍTKA ---
+        st.markdown("<br>", unsafe_allow_html=True) # Trochu místa
+        
+        # Použijeme sloupce 1:1:1. Tlačítko bude mít 1/3 šířky uprostřed.
+        # CSS zajistí, že text nebude zalamovat.
+        btn_col1, btn_col2, btn_col3 = st.columns([1, 1, 1])
         
         with btn_col2:
             start_button = st.button("🚀 SPUSTIT GENERÁTOR")
@@ -250,11 +255,11 @@ def main():
             result_df = pd.DataFrame(results)
             csv_data = result_df.to_csv(sep=";", index=False, encoding="utf-8-sig")
             
-            # Tlačítko pro stažení taky vycentrujeme
-            dwn_col1, dwn_col2, dwn_col3 = st.columns([1, 2, 1])
+            # Tlačítko pro stažení taky vycentrujeme 1:1:1
+            dwn_col1, dwn_col2, dwn_col3 = st.columns([1, 1, 1])
             with dwn_col2:
                 st.download_button(
-                    label="📥 STÁHNOUT VÝSLEDEK (CSV)",
+                    label="📥 STÁHNOUT VÝSLEDEK",
                     data=csv_data,
                     file_name=f"export_contexto.csv",
                     mime="text/csv"
