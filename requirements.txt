@@ -3,3 +3,4 @@ pandas
 requests
 google-generativeai
 lxml
+openpyxl
