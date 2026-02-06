@@ -17,34 +17,22 @@ st.set_page_config(page_title="Plastic Planet AI", layout="centered", page_icon=
 # URL feedu a Model
 FEED_URL = "https://raw.githubusercontent.com/radim-contexto/xmlfeed/refs/heads/main/universal.xml"
 MODEL_NAME = "models/gemini-2.5-pro"
-BATCH_SIZE = 50       # Velikost jedné malé dávky pro AI
-SAFETY_LIMIT = 200    # Kdy se má automaticky vyplivnout soubor
+BATCH_SIZE = 10       # Menší dávky pro AI, aby se uvolňovala paměť častěji
+SAFETY_LIMIT = 50     # !!! SNÍŽENO NA 50 !!! Aby to stihlo uložit dřív, než dojde RAM
 
 # --- CSS STYLING ---
 st.markdown("""
     <style>
-    :root {
-        --primary-color: rgb(0, 232, 190) !important;
-        --background-color: #ffffff;
-        --secondary-background-color: #f0f2f6;
-        --text-color: #000000;
-        --font: sans-serif;
-    }
+    :root { --primary-color: rgb(0, 232, 190) !important; }
     #MainMenu, footer, header {visibility: hidden;}
-    h1 { text-align: center; font-family: 'Helvetica', sans-serif; font-weight: 800; color: #000; padding-bottom: 5px; }
-    .subtitle { text-align: center; color: #666; font-size: 14px; margin-bottom: 30px; text-transform: uppercase; }
+    h1 { text-align: center; font-family: 'Helvetica', sans-serif; font-weight: 800; color: #000; }
+    .subtitle { text-align: center; color: #666; font-size: 14px; margin-bottom: 30px; }
     div.stButton > button {
         width: 100% !important; background-color: rgb(0, 232, 190) !important; color: #000 !important;
         font-weight: 800 !important; padding: 16px 24px !important; border-radius: 50px !important;
-        border: none !important; box-shadow: 0 4px 15px rgba(0, 232, 190, 0.4); transition: all 0.3s ease;
-    }
-    div.stButton > button:hover {
-        transform: translateY(-3px); box-shadow: 0 8px 25px rgba(0, 232, 190, 0.6);
-        background-color: rgb(50, 255, 220) !important;
+        border: none !important; box-shadow: 0 4px 15px rgba(0, 232, 190, 0.4);
     }
     .stProgress > div > div > div > div { background-color: rgb(0, 232, 190); }
-    div[data-testid="stDataFrame"] { border: 1px solid #eee; border-radius: 10px; overflow: hidden; }
-    .stTextInput input, .stNumberInput input { text-align: center; }
     [data-testid="stSidebar"] button { background-color: #ff4b4b !important; border-color: #ff4b4b !important; color: white !important; }
     </style>
 """, unsafe_allow_html=True)
@@ -56,43 +44,47 @@ def remove_accents(input_str):
     nfkd = unicodedata.normalize('NFKD', input_str)
     return "".join([c for c in nfkd if not unicodedata.combining(c)])
 
-def create_excel_bytes(data_list):
-    if not data_list: return None
-    df = pd.DataFrame(data_list)
-    output = io.BytesIO()
-    with pd.ExcelWriter(output, engine='openpyxl') as writer:
-        df.to_excel(writer, index=False, sheet_name='Produkty')
-    output.seek(0)
-    return output
-
 def auto_download_excel(data_list, filename):
-    """JavaScript hack: Stáhne soubor automaticky bez kliknutí."""
+    """JavaScript hack pro automatické stažení s optimalizací paměti."""
     if not data_list: return
     
-    # 1. Vytvořit Excel v paměti
-    df = pd.DataFrame(data_list)
-    output = io.BytesIO()
-    with pd.ExcelWriter(output, engine='openpyxl') as writer:
-        df.to_excel(writer, index=False, sheet_name='Produkty')
-    val = output.getvalue()
-    b64 = base64.b64encode(val).decode()
-    
-    # 2. Vložit neviditelný skript pro stažení
-    js_code = f"""
-        <script>
-        function download() {{
-            var link = document.createElement('a');
-            link.href = 'data:application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;base64,{b64}';
-            link.download = '{filename}';
-            document.body.appendChild(link);
-            link.click();
-            document.body.removeChild(link);
-        }}
-        // Malé zpoždění, aby se stihlo vykreslit UI
-        setTimeout(download, 500);
-        </script>
-    """
-    components.html(js_code, height=0)
+    try:
+        # Vytvoření Excelu
+        df = pd.DataFrame(data_list)
+        output = io.BytesIO()
+        with pd.ExcelWriter(output, engine='openpyxl') as writer:
+            df.to_excel(writer, index=False, sheet_name='Produkty')
+        
+        # Okamžitý úklid DF
+        del df
+        gc.collect()
+        
+        val = output.getvalue()
+        b64 = base64.b64encode(val).decode()
+        
+        # Okamžitý úklid bufferu
+        output.close()
+        del output
+        del val
+        gc.collect()
+
+        # JS Download
+        js_code = f"""
+            <script>
+            function download() {{
+                var link = document.createElement('a');
+                link.href = 'data:application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;base64,{b64}';
+                link.download = '{filename}';
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
+            }}
+            setTimeout(download, 1000);
+            </script>
+        """
+        components.html(js_code, height=0)
+    except Exception as e:
+        st.error(f"Chyba při přípravě souboru: {e}")
 
 @st.cache_data(ttl=3600)
 def load_data_from_xml(url):
@@ -129,7 +121,10 @@ def generate_descriptions(product, api_key):
             VÝSTUP (JSON): {{"shortDescription": "HTML (2-3 věty)", "longDescription": "HTML (strukturovaný text)", "metaTitle": "SEO Title", "metaDescription": "SEO Desc"}}
             JAZYK: Čeština.
             """
-            return json.loads(model.generate_content(prompt).text)
+            result = model.generate_content(prompt)
+            # Okamžité uvolnění paměti modelu
+            del model
+            return json.loads(result.text)
         except Exception as e:
             if attempt == 2: return {"shortDescription": f"Chyba: {e}", "longDescription": "", "metaTitle": "", "metaDescription": ""}
             time.sleep(2)
@@ -146,12 +141,17 @@ def main():
     api_key = st.text_input("Google API Key", value=default_key, type="password")
     if not api_key: st.warning("⚠️ Zadejte API klíč."); return
 
-    # Sidebar záchrana
+    # Sidebar záchrana - Manuální vytvoření Excelu
     with st.sidebar:
         st.markdown("### 🚑 Záchrana dat")
         if 'processed_data' in st.session_state and len(st.session_state['processed_data']) > 0:
-            xls = create_excel_bytes(st.session_state['processed_data'])
-            if xls: st.download_button("💾 STÁHNOUT NYNÍ", xls, "ZACHRANA.xlsx")
+            st.warning(f"V paměti je {len(st.session_state['processed_data'])} nezajištěných položek.")
+            if st.button("Vytvořit záchranný soubor"):
+                 df_rescue = pd.DataFrame(st.session_state['processed_data'])
+                 out_rescue = io.BytesIO()
+                 with pd.ExcelWriter(out_rescue, engine='openpyxl') as writer:
+                     df_rescue.to_excel(writer, index=False)
+                 st.download_button("💾 STÁHNOUT NYNÍ", out_rescue, "ZACHRANA_CRASH.xlsx")
 
     with st.spinner("⏳ Načítám feed..."): all_products = load_data_from_xml(FEED_URL)
     if not all_products: return
@@ -173,7 +173,7 @@ def main():
             cat_name = cats.iloc[idx]["Kategorie"]
             count = int(cats.iloc[idx]["Počet"])
             
-            st.info(f"Vybráno: **{cat_name}** ({count} ks). Autopilot bude stahovat data po {SAFETY_LIMIT} kusech.")
+            st.info(f"Vybráno: **{cat_name}** ({count} ks). Stabilní režim: ukládání po {SAFETY_LIMIT} kusech.")
             
             c1, c2 = st.columns(2)
             start = c1.number_input("Začít od:", min_value=1, max_value=count, value=1, step=50)
@@ -191,25 +191,25 @@ def main():
         offset = st.session_state['current_offset']
         total = st.session_state['total_count']
         
-        # --- KONTROLA LIMITU A AUTOMATICKÉ STAŽENÍ ---
+        # --- KONTROLA LIMITU ---
         if len(st.session_state['processed_data']) >= SAFETY_LIMIT:
-            st.success(f"📦 Část {st.session_state['part_number']} hotova. Stahuji a pokračuji...")
+            st.success(f"📦 Část {st.session_state['part_number']} hotova. Stahuji...")
             
-            # 1. Připravit název
             safe_name = remove_accents(cat).replace(" ", "_")[:15]
             end_proc = offset
             start_proc = end_proc - len(st.session_state['processed_data']) + 1
-            filename = f"export_{safe_name}_PART{st.session_state['part_number']}_{start_proc}-{end_proc}.xlsx"
+            filename = f"export_{safe_name}_P{st.session_state['part_number']}_{start_proc}-{end_proc}.xlsx"
             
-            # 2. Vynutit stažení (JavaScript)
+            # Automatické stažení
             auto_download_excel(st.session_state['processed_data'], filename)
             
-            # 3. Vyčistit a pokračovat (s malou pauzou, aby se download stihl iniciovat)
-            time.sleep(3) 
+            # Pauza na stažení
+            time.sleep(4) 
             
+            # Vyčištění paměti
             st.session_state['processed_data'] = []
             st.session_state['part_number'] += 1
-            gc.collect()
+            gc.collect() # Vynucený úklid RAM
             st.rerun()
 
         # --- SMYČKA ---
@@ -217,47 +217,62 @@ def main():
         st.progress(min(offset / total, 1.0))
         st.caption(f"Zpracováno {offset}/{total}")
         
-        cat_products = df[df['CATEGORYTEXT'] == cat]
-        batch = cat_products.iloc[offset : offset + BATCH_SIZE].to_dict('records')
-        
-        if batch:
-            status = st.empty()
-            for i, item in enumerate(batch):
-                status.text(f"Generuji ({offset+i+1}/{total}): {item.get('PRODUCT')}")
-                ai_data = generate_descriptions(item, api_key)
-                final = {**item, **ai_data}
-                
-                clean = {
-                    "kód": final.get("CODE"), "PRODUCT": final.get("PRODUCT"),
-                    "MANUFACTURER": final.get("MANUFACTURER"), "modelClean": final.get("modelClean"),
-                    "scale": final.get("scale"), "PRICE_VAT": final.get("PRICE_VAT"),
-                    "URL": final.get("URL"), "EAN": final.get("EAN"),
-                    "CATEGORYTEXT": final.get("CATEGORYTEXT"), "shortDescription": final.get("shortDescription"),
-                    "longDescription": final.get("longDescription"), "metaTitle": final.get("metaTitle"),
-                    "metaDescription": final.get("metaDescription")
-                }
-                st.session_state['processed_data'].append(clean)
-                time.sleep(0.05)
+        # Pojistka proti pádu - Try/Except okolo celé logiky
+        try:
+            cat_products = df[df['CATEGORYTEXT'] == cat]
+            # Uvolnit hlavní DF pokud není potřeba
+            # del df (necháme pro jistotu, kdyby se refreshnulo)
             
-            st.session_state['current_offset'] += BATCH_SIZE
+            batch = cat_products.iloc[offset : offset + BATCH_SIZE].to_dict('records')
             
-            if st.session_state['current_offset'] < total:
-                st.rerun()
-            else:
-                # KONEC - Stáhnout zbytek
-                st.success("✅ HOTOVO! Stahuji poslední část...")
-                if st.session_state['processed_data']:
-                    safe_name = remove_accents(cat).replace(" ", "_")[:15]
-                    filename = f"export_{safe_name}_FINAL.xlsx"
-                    auto_download_excel(st.session_state['processed_data'], filename)
-                    time.sleep(3)
+            if batch:
+                status = st.empty()
+                for i, item in enumerate(batch):
+                    status.text(f"Generuji ({offset+i+1}/{total}): {item.get('PRODUCT')}")
+                    ai_data = generate_descriptions(item, api_key)
+                    final = {**item, **ai_data}
+                    
+                    clean = {
+                        "kód": final.get("CODE"), "PRODUCT": final.get("PRODUCT"),
+                        "MANUFACTURER": final.get("MANUFACTURER"), "modelClean": final.get("modelClean"),
+                        "scale": final.get("scale"), "PRICE_VAT": final.get("PRICE_VAT"),
+                        "URL": final.get("URL"), "EAN": final.get("EAN"),
+                        "CATEGORYTEXT": final.get("CATEGORYTEXT"), "shortDescription": final.get("shortDescription"),
+                        "longDescription": final.get("longDescription"), "metaTitle": final.get("metaTitle"),
+                        "metaDescription": final.get("metaDescription")
+                    }
+                    st.session_state['processed_data'].append(clean)
+                    
+                    # Explicitní smazání proměnných
+                    del ai_data
+                    del final
+                    del clean
+                    
+                st.session_state['current_offset'] += BATCH_SIZE
+                gc.collect() # Úklid po každé malé dávce
                 
-                if st.button("Zpracovat jinou kategorii"):
-                    st.session_state['processing_active'] = False
+                if st.session_state['current_offset'] < total:
                     st.rerun()
-        else:
-            st.session_state['processing_active'] = False
-            st.rerun()
+                else:
+                    # KONEC
+                    st.success("✅ HOTOVO! Stahuji zbytek...")
+                    if st.session_state['processed_data']:
+                        safe_name = remove_accents(cat).replace(" ", "_")[:15]
+                        filename = f"export_{safe_name}_FINAL.xlsx"
+                        auto_download_excel(st.session_state['processed_data'], filename)
+                        time.sleep(4)
+                    
+                    if st.button("Zpracovat jinou kategorii"):
+                        st.session_state['processing_active'] = False
+                        st.rerun()
+            else:
+                st.session_state['processing_active'] = False
+                st.rerun()
+                
+        except Exception as e:
+            st.error(f"⚠️ Došlo k chybě: {e}")
+            st.warning("Aplikace narazila na limit. Použijte tlačítko ZÁCHRANA DAT vlevo.")
+            st.stop()
 
 if __name__ == "__main__":
     main()
