@@ -15,10 +15,10 @@ import streamlit.components.v1 as components
 st.set_page_config(page_title="Plastic Planet AI", layout="centered", page_icon="🧩")
 
 # URL feedu a Model
-FEED_URL = "https://raw.githubusercontent.com/radim-contexto/xmlfeed/refs/heads/main/universal.xml"
+FEED_URL = "https://www.plasticplanet.cz/universal.xml?hash=9tggSsPcMkaJHHLXcX07ZU"
 MODEL_NAME = "models/gemini-2.5-pro"
 BATCH_SIZE = 10       # Menší dávky pro AI, aby se uvolňovala paměť častěji
-SAFETY_LIMIT = 50     # !!! SNÍŽENO NA 50 !!! Aby to stihlo uložit dřív, než dojde RAM
+SAFETY_LIMIT = 50     # Ukládání po 50 kusech pro maximální stabilitu bez pádu
 
 # --- CSS STYLING ---
 st.markdown("""
@@ -95,11 +95,17 @@ def load_data_from_xml(url):
         products = []
         for item in root.findall(".//SHOPITEM"):
             def get_text(tag): return item.find(tag).text if item.find(tag) is not None else ""
+            
+            # Striktně jen tag CODE
             prod = {
-                "CODE": get_text("CODE"), "PRODUCT": get_text("PRODUCT"),
-                "MANUFACTURER": get_text("MANUFACTURER"), "modelClean": get_text("modelClean"),
-                "scale": get_text("scale"), "PRICE_VAT": get_text("PRICE_VAT"),
-                "URL": get_text("URL"), "EAN": get_text("EAN"),
+                "CODE": get_text("CODE"), 
+                "PRODUCT": get_text("PRODUCT"),
+                "MANUFACTURER": get_text("MANUFACTURER"), 
+                "modelClean": get_text("modelClean"),
+                "scale": get_text("scale"), 
+                "PRICE_VAT": get_text("PRICE_VAT"),
+                "URL": get_text("URL"), 
+                "EAN": get_text("EAN"),
                 "CATEGORYTEXT": get_text("CATEGORYTEXT")
             }
             if prod["PRODUCT"] and prod["CATEGORYTEXT"]: products.append(prod)
@@ -173,7 +179,7 @@ def main():
             cat_name = cats.iloc[idx]["Kategorie"]
             count = int(cats.iloc[idx]["Počet"])
             
-            st.info(f"Vybráno: **{cat_name}** ({count} ks). Stabilní režim: ukládání po {SAFETY_LIMIT} kusech.")
+            st.info(f"Vybráno: **{cat_name}** ({count} ks). Stabilní režim: automatické ukládání po {SAFETY_LIMIT} kusech.")
             
             c1, c2 = st.columns(2)
             start = c1.number_input("Začít od:", min_value=1, max_value=count, value=1, step=50)
@@ -193,7 +199,7 @@ def main():
         
         # --- KONTROLA LIMITU ---
         if len(st.session_state['processed_data']) >= SAFETY_LIMIT:
-            st.success(f"📦 Část {st.session_state['part_number']} hotova. Stahuji...")
+            st.success(f"📦 Část {st.session_state['part_number']} hotova. Automaticky stahuji a pokračuji...")
             
             safe_name = remove_accents(cat).replace(" ", "_")[:15]
             end_proc = offset
@@ -203,7 +209,7 @@ def main():
             # Automatické stažení
             auto_download_excel(st.session_state['processed_data'], filename)
             
-            # Pauza na stažení
+            # Pauza na bezpečné stažení
             time.sleep(4) 
             
             # Vyčištění paměti
@@ -220,8 +226,6 @@ def main():
         # Pojistka proti pádu - Try/Except okolo celé logiky
         try:
             cat_products = df[df['CATEGORYTEXT'] == cat]
-            # Uvolnit hlavní DF pokud není potřeba
-            # del df (necháme pro jistotu, kdyby se refreshnulo)
             
             batch = cat_products.iloc[offset : offset + BATCH_SIZE].to_dict('records')
             
@@ -243,7 +247,6 @@ def main():
                     }
                     st.session_state['processed_data'].append(clean)
                     
-                    # Explicitní smazání proměnných
                     del ai_data
                     del final
                     del clean
